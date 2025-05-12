@@ -22,6 +22,7 @@ pkgs.mkShell {
     pkgs.stdenv.cc.cc.lib
     pkgs.zlib
     pkgs.nushell
+    pkgs.git
   ];
 
   # This LD_LIBRARY_PATH is set for the environment of mkShell itself
@@ -80,6 +81,5 @@ pkgs.mkShell {
     echo "------------------------------------------------------------------------------------"
     echo ""
     unset SOURCE_DATE_EPOCH
-    exec nu
   '';
 }

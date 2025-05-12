@@ -1,4 +1,2 @@
-# requirements.txt
 python-dotenv
 google-generativeai
-

@@ -233,7 +233,7 @@ def main():
                     "parts": [
                         {
                             "text": (
-                                "- Recognize the handwriting and other content in this image.\n"
+                                "- Recognize the handwriting and other content in this image. It is either english or spanish, if you dont get something, infer it\n"
                                 "- Convert it to organized markdown format. The markdown output itself should NOT be enclosed in triple backticks (```markdown ... ``` or ``` ... ```).\n"
                                 "- Preserve headings, lists, list indentation, horizontal rules, tables, blockquotes, and other structures.\n"
                                 "- Underlined text on its own line should be a H3 header in markdown, prefixed with: ### \n"
@@ -244,6 +244,9 @@ def main():
                                 "- Text with two asterisks before and after it should be maintained as markdown bold. For example: **bold text here**\n"
                                 "- Text with three asterisks before and after it should be maintained as markdown bold italics. For example ***very important text***\n"
                                 "- Blockquotes in the image will have a > symbol to the left and should be maintained as markdown blockquote. For example: > blockquote text"
+                                "- Make sure to return VALID obsidian markdown, this is super important."
+                                "- Use markdown LaTeX for the math symbols."
+                                "- Remember that this files are going to be in spanish or english, if you think a word you see is +90% probable to be another word, use the other word."
                             )
                         },
                         {

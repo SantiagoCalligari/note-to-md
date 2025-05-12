@@ -13,13 +13,13 @@ import re # For filename parsing
 # Script to convert Supernote .note files to PDF and use Gemini API for handwriting recognition.
 # Processes .note files from a specified input directory, generates markdown,
 # saves to an Obsidian daily notes structure, and tracks processed files in a log.
-# Finally, commits changes to the Obsidian directory using Git.
+# Pulls changes from Git remote, then commits and pushes changes to the Obsidian directory.
 
 # Before first use (especially for systemd):
 # 1. Ensure supernote-tool is installed and accessible.
 # 2. Set SUPERNOTE_TOOL_PATH environment variable (system-wide or in .env).
 # 3. Store Gemini API key in ~/.api_keys/gemini_key.
-# 4. Initialize ../notas/Diarias as a Git repository.
+# 4. Initialize ../notas/ as a Git repository.
 # 5. CRITICAL FOR SYSTEMD/NON-INTERACTIVE GIT PUSH:
 #    Configure SSH key-based authentication for Git with your remote repository (e.g., GitHub).
 #    The script CANNOT handle password prompts.
@@ -28,6 +28,7 @@ import re # For filename parsing
 #    - Ensure Git remote URL is SSH (git@github.com:user/repo.git).
 #    See: https://docs.github.com/en/authentication
 # 6. A '.processed_supernotes.log' file will be created in PROJECT_ROOT to track processed files.
+# 7. Ensure a .gitignore file in the 'notas' directory excludes 'Diarias/attachments/'.
 
 # Load environment variables from the .env file
 # .env file can be in the script's directory or PROJECT_ROOT
@@ -67,12 +68,15 @@ if not GOOGLE_API_KEY:
     print("Error: GOOGLE_API_KEY is empty. Check ~/.api_keys/gemini_key.")
     sys.exit(1)
 
-GEMINI_MODEL = "gemini-2.0-flash" # As per user request
+GEMINI_MODEL = "gemini-2.0-flash"
 GEMINI_ENDPOINT = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GOOGLE_API_KEY}"
 
 SUPERNOTE_INPUT_DIR = os.path.abspath(os.path.join(PROJECT_ROOT, "Drive", "Supernote", "Note"))
+# OBSIDIAN_OUTPUT_DIR is where .md files and attachments/ are created (e.g., PROJECT_ROOT/notas/Diarias)
 OBSIDIAN_OUTPUT_DIR = os.path.abspath(os.path.join(PROJECT_ROOT, "notas", "Diarias"))
-OBSIDIAN_ATTACHMENTS_SUBDIR_NAME = "attachments" # PDFs will be saved here but not linked
+# GIT_REPO_DIR is the root of the git repository (e.g., PROJECT_ROOT/notas)
+GIT_REPO_DIR = os.path.abspath(os.path.join(PROJECT_ROOT, "notas"))
+OBSIDIAN_ATTACHMENTS_SUBDIR_NAME = "attachments" # PDFs will be saved here
 PROCESSED_LOG_FILE = os.path.join(PROJECT_ROOT, ".processed_supernotes.log")
 
 
@@ -122,11 +126,38 @@ def run_git_command(command, cwd):
 # --- Main Processing Logic ---
 def main():
     print(f"Input Supernote directory: {SUPERNOTE_INPUT_DIR}")
-    print(f"Output Obsidian directory: {OBSIDIAN_OUTPUT_DIR}")
+    print(f"Output Obsidian directory (for .md and attachments): {OBSIDIAN_OUTPUT_DIR}")
+    print(f"Git repository directory: {GIT_REPO_DIR}")
     print(f"Processed files log: {PROCESSED_LOG_FILE}")
     print(f"Gemini Model: {GEMINI_MODEL}")
     print("Note: PDFs will be saved to the attachments folder but NOT linked in markdown.")
     print("Note: Original .note files will NOT be moved.")
+
+    is_git_repo = False # Flag to track if GIT_REPO_DIR is a valid Git repository
+
+    # --- GIT PULL ---
+    print("\nAttempting Git pull...")
+    git_check_command = ["git", "rev-parse", "--is-inside-work-tree"]
+    try:
+        # Check if GIT_REPO_DIR is a git repository
+        result = subprocess.run(git_check_command, cwd=GIT_REPO_DIR, check=True, capture_output=True, text=True)
+        if result.stdout.strip() == "true":
+            is_git_repo = True
+            print(f"{GIT_REPO_DIR} is a Git repository.")
+    except FileNotFoundError:
+        print(f"Warning: Git command not found. Ensure Git is installed and in PATH. Skipping Git operations.")
+    except subprocess.CalledProcessError:
+         print(f"Warning: {GIT_REPO_DIR} does not appear to be a Git repository. Skipping Git operations.")
+    except Exception as e:
+         print(f"Warning: Could not verify Git repository status for {GIT_REPO_DIR}: {e}. Skipping Git operations.")
+
+
+    if is_git_repo:
+        if not run_git_command(["git", "pull"], cwd=GIT_REPO_DIR):
+            print("Warning: Git pull failed. Continuing with local files, but conflicts might occur later when pushing.")
+        else:
+            print("Git pull successful.")
+    # --- END GIT PULL ---
 
     already_processed_files = load_processed_files(PROCESSED_LOG_FILE)
 
@@ -151,6 +182,7 @@ def main():
     
     if not files_to_process:
         print("No new .note files found to process (or all found files already processed).")
+        # If it's a git repo and no files to process, still good to exit 0
         sys.exit(0)
 
     print(f"Found {len(files_to_process)} new .note file(s) to process.")
@@ -165,7 +197,7 @@ def main():
             input_file_path = os.path.join(SUPERNOTE_INPUT_DIR, filename)
             
             match = re.match(r"(\d{8})_(\d{6})\.note", filename)
-            if not match: continue # Should be caught by initial filter
+            if not match: continue
 
             date_part_str = match.group(1)
             time_part_str = match.group(2)
@@ -268,12 +300,9 @@ def main():
                         f.write(entry_block.lstrip('\n'))
                         print(f"✓ Appended entry to Supernote section in {obsidian_md_file_path}")
             
-            # Log as processed *after* successful Obsidian update
             if add_to_processed_log(filename, PROCESSED_LOG_FILE):
-                already_processed_files.add(filename) # Update in-memory set
+                already_processed_files.add(filename)
             else:
-                # If logging fails, it's a problem, but we might have already modified Obsidian.
-                # Decide on rollback or just warning. For now, a strong warning.
                 print(f"CRITICAL WARNING: Failed to log {filename} as processed. It might be reprocessed next run.")
 
             processed_dates_for_commit.add(f"{year_str}-{month_str}-{day_str}")
@@ -298,34 +327,36 @@ def main():
             import traceback
             traceback.print_exc()
     
-    if processed_dates_for_commit: # Only attempt Git if new content was added
-        print("\nPerforming Git operations...")
+    if processed_dates_for_commit and is_git_repo: # Only attempt Git if new content was added AND it's a valid repo
+        print("\nPerforming Git commit and push operations...")
+        print(f"IMPORTANT: Ensure you have a .gitignore file in '{GIT_REPO_DIR}'")
+        print(f"           that excludes '{os.path.join('Diarias', OBSIDIAN_ATTACHMENTS_SUBDIR_NAME)}/'")
+        print(f"           (e.g., add 'Diarias/{OBSIDIAN_ATTACHMENTS_SUBDIR_NAME}/' to .gitignore)")
+        print(f"           to prevent PDF files from being committed.")
+
         commit_message = f"Update daily notes from Supernote for dates: {', '.join(sorted(list(processed_dates_for_commit)))}"
         
-        git_check_command = ["git", "rev-parse", "--is-inside-work-tree"]
-        is_git_repo = False
-        try:
-            result = subprocess.run(git_check_command, cwd=OBSIDIAN_OUTPUT_DIR, check=True, capture_output=True, text=True)
-            if result.stdout.strip() == "true":
-                is_git_repo = True
-                print(f"{OBSIDIAN_OUTPUT_DIR} is a Git repository.")
-        except (subprocess.CalledProcessError, FileNotFoundError):
-             print(f"Warning: {OBSIDIAN_OUTPUT_DIR} is not a Git repository or git command failed. Skipping Git operations.")
-
-        if is_git_repo:
-            if run_git_command(["git", "add", "."], cwd=OBSIDIAN_OUTPUT_DIR):
-                status_result = subprocess.run(["git", "status", "--porcelain"], cwd=OBSIDIAN_OUTPUT_DIR, capture_output=True, text=True)
-                if status_result.stdout.strip():
-                    if run_git_command(["git", "commit", "-m", commit_message], cwd=OBSIDIAN_OUTPUT_DIR):
-                        run_git_command(["git", "push"], cwd=OBSIDIAN_OUTPUT_DIR)
-                else:
-                    print("No changes to commit in the Git repository.")
-    elif files_to_process: # Files were found, but none successfully processed
+        # The command 'git add Diarias/' is run from GIT_REPO_DIR.
+        # It will add changes within the 'Diarias' subdirectory relative to GIT_REPO_DIR.
+        # .gitignore in GIT_REPO_DIR should handle exclusions like 'Diarias/attachments/'.
+        if run_git_command(["git", "add", "Diarias/"], cwd=GIT_REPO_DIR):
+            status_result = subprocess.run(["git", "status", "--porcelain"], cwd=GIT_REPO_DIR, capture_output=True, text=True)
+            if status_result.stdout.strip(): # Check if there are actual changes staged
+                if run_git_command(["git", "commit", "-m", commit_message], cwd=GIT_REPO_DIR):
+                    run_git_command(["git", "push"], cwd=GIT_REPO_DIR)
+            else:
+                print("No changes to commit in the Git repository after 'git add'.")
+    elif processed_dates_for_commit and not is_git_repo:
+        print("\nFiles were processed, but Git operations (commit/push) were skipped as the target is not a valid Git repository or git is unavailable.")
+    elif files_to_process and not processed_dates_for_commit: # Files were found, but none successfully processed
          print("\nNo files were successfully processed this run to trigger Git operations.")
+
 
     print("\n--- Script Summary ---")
     print(f"Total .note files found in directory: {len(all_note_files_in_dir)}")
-    print(f"Files already processed (from log): {len(already_processed_files) - newly_processed_count}") # Adjust for those processed this run
+    # Adjust count for those processed this run to reflect pre-run state
+    count_already_processed_before_run = len(already_processed_files) - newly_processed_count
+    print(f"Files already processed (before this run): {count_already_processed_before_run}")
     print(f"New files attempted this run: {len(files_to_process)}")
     print(f"Successfully processed this run: {newly_processed_count}")
     print(f"Failed to process this run: {len(files_to_process) - newly_processed_count}")
@@ -335,11 +366,10 @@ def main():
         sys.exit(1)
     elif newly_processed_count < len(files_to_process) and files_to_process:
         print("Script finished with partial success: Some new files could not be processed this run.")
-        sys.exit(0) 
-    else:
+        sys.exit(0) # Partial success is still a 0 exit code as some work was done
+    else: # All attempted files processed, or no new files to process initially
         print("✅ Script finished successfully.")
         sys.exit(0)
 
 if __name__ == "__main__":
     main()
-

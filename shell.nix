@@ -23,6 +23,7 @@ pkgs.mkShell {
     pkgs.zlib
     pkgs.nushell
     pkgs.git
+    pkgs.openssh
   ];
 
   # This LD_LIBRARY_PATH is set for the environment of mkShell itself
